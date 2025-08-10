@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>Dynamic Bus Route Planner</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .main-panel {
+        height: 900px; 
+        display: flex;
+        flex-direction: column;
+    }
+    #map { width: 100%; height: 100%;}
+    #time-slider-value { font-weight: 700; color: #16a34a; }
+    .loader {
+        border: 5px solid #f3f3f3; border-radius: 50%; border-top: 5px solid #3498db;
+        width: 50px; height: 50px; animation: spin 1s linear infinite;
+        position: absolute; top: 50%; left: 50%; z-index: 1000;
+        margin-left: -25px; margin-top: -25px; display: none;
+    }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    
+    .station-marker-content {
+        background-color: rgba(255, 255, 255, 0.9); border: 2px solid #e6194b;
+        border-radius: 50%; color: #e6194b; font-weight: bold; text-align: center;
+        line-height: 20px; font-size: 12px; width: 24px; height: 24px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    }
+    .hub-marker-content { background-color: #4363d8; color: white; border: 2px solid white; }
+
+    .journey-details summary, .route-details summary { cursor: pointer; }
+    .journey-details ul, .route-details ul { list-style-type: none; padding-left: 20px; margin-top: 8px; border-left: 2px solid #ddd; }
+    .journey-details li, .route-details li { margin-bottom: 5px; position: relative; }
+    .journey-details .bus-leg::before {margin-right: 8px; }
+    .journey-details .walk-leg::before { content: '🚶'; margin-right: 8px; }
+
+    .gm-style .gm-style-iw-c { padding: 10px !important; }
+    .gm-style .gm-style-iw-d { overflow: auto !important; }
+    
+    .network-strategy-group > summary {
+      font-size: 1.125rem; /* text-lg */
+      font-weight: 700;
+      padding: 0.5rem 0.25rem;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .network-strategy-group > div {
+        padding-left: 0.5rem;
+    }
+  </style>
+</head>
+<body class="bg-gray-100">
+<div class="px-4 sm:px-6 lg:px-8 py-8">
+  <h1 class="text-3xl font-bold text-center mb-6">Dynamic Bus Route Planner</h1>
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+    
+    <div class="lg:col-span-2 bg-white p-4 rounded-lg shadow-md main-panel">
+      <h2 class="text-xl font-semibold mb-3 border-b pb-2 flex-shrink-0">Generated Bus Networks</h2>
+      <div id="route-info" class="text-sm text-gray-800 flex-grow overflow-y-auto space-y-2"></div>
+    </div>
+
+    <div class="lg:col-span-5 bg-white p-4 rounded-lg shadow-md relative main-panel">
+      <div id="loader" class="loader"></div>
+      <div id="map"></div>
+    </div>
+
+    <div class="lg:col-span-2 bg-white p-6 rounded-lg shadow-md main-panel overflow-y-auto">
+        <div class="border-b pb-6">
+          <h2 class="text-xl font-semibold mb-3">1. Generate Networks</h2>
+          <label for="time-slider" class="block font-medium mb-1">
+            Time of Day: <span id="time-slider-value">09:00 AM</span>
+          </label>
+          <input type="range" id="time-slider" min="420" max="720" value="540" step="15" class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer" />
+          <div class="flex justify-between text-xs text-gray-500"><span>07:00 AM</span><span>12:00 PM</span></div>
+          
+          <label for="num-buses" class="block font-medium mb-1 mt-4">Buses Per Strategy:</label>
+          <input type="number" id="num-buses" value="4" min="1" max="10" class="w-full p-2 border border-gray-300 rounded">
+          
+          <button onclick="generateNetwork()" class="mt-4 w-full bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700 transition-colors">Generate All Networks</button>
+        </div>
+        <div class="pt-4">
+          <h2 class="text-xl font-semibold mb-3">2. Find Your Journey</h2>
+          <form id="journey-form" onsubmit="event.preventDefault(); findJourney();" class="space-y-4">
+            <div>
+                <label class="block font-medium mb-1">Start</label>
+                <select id="start-point" class="w-full p-2 border border-gray-300 rounded"></select>
+            </div>
+            
+            <div>
+                <label class="block font-medium mb-1">Stopovers</label>
+                <div id="stopover-list-container" class="space-y-2">
+                </div>
+                <button type="button" onclick="addStopoverSelect()" class="mt-2 text-sm text-blue-600 hover:text-blue-800 transition-colors">
+                    + Add Stopover
+                </button>
+            </div>
+
+            <div>
+                <label class="block font-medium mb-1">Destination</label>
+                <select id="end-point" class="w-full p-2 border border-gray-300 rounded"></select>
+            </div>
+            <button type="submit" class="w-full bg-green-600 text-white px-6 py-2 rounded hover:bg-green-700 transition-colors">Find My Route</button>
+          </form>
+        </div>
+    </div>
+    
+    <div class="lg:col-span-3 bg-white p-4 rounded-lg shadow-md main-panel">
+        <h2 class="text-xl font-semibold mb-3 border-b pb-2 flex-shrink-0">Suggested Journeys</h2>
+        <div id="journey-details" class="text-sm flex-grow min-h-0 overflow-y-auto bg-gray-50 p-1 space-y-2">
+        </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  const API_KEY = "YOUR_API_KEY";
+  const MAP_ID = "YOUR_MAP_ID";
+
+  const ROUTE_COLORS = ['#e6194b','#3cb44b','#4363d8','#f58231','#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe', '#008080'];
+  const JOURNEY_COLORS = {'balanced network': '#ff4500', 'demand network': '#1e90ff', 'zonal network': '#32cd32'};
+  const loader = document.getElementById('loader');
+
+  let map, infoWindow, directionsService;
+  let markers = [], vprPolylines = [], journeyPolylines = [];
+  let allStopsData = [], idToStopMap = {}, allRoutesData = [];
+
+  function loadGoogleMapsScript() {
+    const script = document.createElement('script');
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${API_KEY}&map_ids=${MAP_ID}&callback=initMap&libraries=marker,routes&v=weekly`;
+    script.async = true;
+    script.defer = true;
+    document.head.appendChild(script);
+  }
+
+  function formatTimeFromMinutes(totalMinutes) {
+      const h_24 = Math.floor(totalMinutes / 60);
+      const m = Math.round(totalMinutes % 60);
+      const ampm = h_24 >= 12 && h_24 < 24 ? 'PM' : 'AM';
+      const h_12 = h_24 % 12 || 12;
+      return `${String(h_12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${ampm}`;
+  }
+
+  async function populate({ all_stops, networks }) {
+    allStopsData = all_stops;
+    idToStopMap = all_stops.reduce((map, stop) => { map[stop.id] = stop; return map; }, {});
+    allRoutesData = Object.values(networks).flat();
+
+    const start = document.getElementById('start-point');
+    const end = document.getElementById('end-point');
+    const journeyDetails = document.getElementById('journey-details');
+    start.innerHTML = ''; end.innerHTML = ''; journeyDetails.innerHTML = '';
+    document.getElementById('stopover-list-container').innerHTML = '';
+
+    const customerStops = all_stops.filter(s => s.area_type !== 'depot').sort((a,b) => a.name.localeCompare(b.name));
+    
+    const placeholderOption = '<option value="" disabled selected>Select a location</option>';
+    start.innerHTML += placeholderOption;
+    end.innerHTML += placeholderOption;
+    customerStops.forEach(s => {
+        const option = `<option value="${s.name}">${s.name}</option>`;
+        start.innerHTML += option;
+        end.innerHTML += option;
+    });
+
+    const bounds = new google.maps.LatLngBounds();
+    markers.forEach(m => m.map = null);
+    markers = [];
+
+    for (const s of all_stops) {
+      const isDepot = s.id <= 0;
+      const markerContent = document.createElement('div');
+      markerContent.className = `station-marker-content ${isDepot ? 'hub-marker-content' : ''}`;
+      markerContent.textContent = isDepot ? 'H' : s.id;
+      const marker = new google.maps.marker.AdvancedMarkerElement({map: map, position: { lat: s.lat, lng: s.lng }, content: markerContent, title: `[${isDepot ? 'Hub' : s.id}] ${s.name}`});
+      marker.addListener('click', () => { infoWindow.setContent(`<b>${marker.title}</b><br>Demand: ${idToStopMap[s.id]?.demand || 'N/A'}`); infoWindow.open(map, marker); });
+      markers.push(marker);
+      bounds.extend({ lat: s.lat, lng: s.lng });
+    }
+
+    const info = document.getElementById('route-info');
+    info.innerHTML = '';
+    for (const strategyName in networks) {
+      const routes = networks[strategyName];
+      const title = strategyName.charAt(0).toUpperCase() + strategyName.slice(1) + " Network";
+      let networkHtml = `<details class="network-strategy-group" open><summary>${title}</summary><div class="space-y-2 mt-2">`;
+      if (routes.length === 0) networkHtml += `<p class="text-gray-500 text-xs px-2">No routes generated.</p>`;
+      for (const [i, r] of routes.entries()) {
+          const color = ROUTE_COLORS[i % ROUTE_COLORS.length];
+          let scheduleHtml = `<ul class="text-xs mt-2 space-y-1">`;
+          r.schedule.forEach(step => {
+              const stopName = step.stop_name;
+              scheduleHtml += `<li class="flex justify-between items-center"><span><span class="font-bold">${step.eta}</span> - ${stopName}</span></li>`;
+          });
+          scheduleHtml += `</ul>`;
+          const routeNames = r.stop_ids.map(id => `[${idToStopMap[id].id <= 0 ? 'H' : idToStopMap[id].id}]`).join('→');
+          networkHtml += `<details class="route-details p-2 rounded border-l-4" style="border-color:${color}; background-color: #f8f9fa;"><summary><strong>Bus Route ${r.id + 1}</strong> (Cost: ${r.cost})<br><span class="text-xs break-words">${routeNames}</span></summary>${scheduleHtml}</details>`;
+      }
+      networkHtml += `</div></details>`;
+      info.innerHTML += networkHtml;
+    }
+    if(!bounds.isEmpty()) map.fitBounds(bounds);
+  }
+
+  async function generateNetwork() {
+    clearMap();
+    loader.style.display = 'block';
+    const mins = +document.getElementById('time-slider').value;
+    const hh = String(Math.floor(mins/60)).padStart(2,'0'), mm = String(mins%60).padStart(2,'0');
+    const numBuses = +document.getElementById('num-buses').value;
+    try {
+        const res = await fetch('/api/generate-network', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ time:`${hh}:${mm}`, num_buses: numBuses })
+        });
+        const data = await res.json();
+        await populate(data);
+    } catch (e) {
+        console.error("Failed to generate network:", e);
+        alert("Error generating network. Please check the console and ensure the server is running.");
+    } finally { loader.style.display = 'none'; }
+  }
+
+  async function findJourney() {
+    const start = document.getElementById('start-point').value;
+    const end = document.getElementById('end-point').value;
+    const detailsDiv = document.getElementById('journey-details');
+
+    if (!start || !end) {
+        detailsDiv.innerHTML = `<p class="p-2 text-gray-500">Please select a start and destination.</p>`;
+        return;
+    }
+    const stopovers = Array.from(document.querySelectorAll('.stopover-point')).map(select => select.value).filter(Boolean);
+    const allPoints = [start, ...stopovers, end];
+    if (allPoints.length !== new Set(allPoints).size) {
+        detailsDiv.innerHTML = `<p class="text-red-500 p-2">Start, destination, and all stopovers must be unique locations.</p>`;
+        return;
+    }
+
+    loader.style.display = 'block';
+    detailsDiv.innerHTML = '';
+    journeyPolylines.forEach(p => p.setMap(null));
+    journeyPolylines = [];
+
+    try {
+        const startMins = +document.getElementById('time-slider').value;
+        const hh = String(Math.floor(startMins / 60)).padStart(2, '0');
+        const mm = String(startMins % 60).padStart(2, '0');
+        
+        const payload = { start, end, stopovers, start_time: `${hh}:${mm}` };
+        
+        const res = await fetch('/api/find-journey', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) 
+        });
+        const data = await res.json();
+        
+        if (data.error) throw new Error(data.error);
+        if (!data.journeys || data.journeys.length === 0) {
+            detailsDiv.innerHTML = `<p class="text-gray-700 p-2">No route could be found between these stops. Please try another combination or generate a new network.</p>`;
+            return;
+        }
+
+        for (const [i, journey] of data.journeys.entries()) {
+            const journeyTitle = journey.name.toLowerCase();
+            const color = JOURNEY_COLORS[journeyTitle] || '#808080';
+            
+            const firstDeparture = journey.segments[0].stops[0].eta;
+            const lastArrival = journey.segments[journey.segments.length-1].stops.slice(-1)[0].eta;
+
+            let journeyHTML = `<details class="journey-details p-2 rounded border-l-4" style="border-color:${color}; background-color: #f8f9fa;" open>
+                <summary>
+                    <strong>${journey.name}</strong> (Approx. ${journey.time} min) 
+                    <span class="font-semibold text-gray-700 ml-2">${firstDeparture} - ${lastArrival}</span>
+                </summary><ul>`;
+            
+            for (const segment of journey.segments) {
+                const pathStops = segment.stops.map(p => ({ lat: p.lat, lng: p.lng }));
+                const snappedPath = await fetchGoogleRoute(pathStops);
+                const polyline = new google.maps.Polyline({
+                    path: snappedPath, strokeColor: color, strokeOpacity: 0.8, strokeWeight: 6,
+                    icons: segment.type === 'walk' ? [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 2 }, offset: '0', repeat: '10px' }] : null,
+                    map: map
+                });
+                journeyPolylines.push(polyline);
+                
+                const legClass = segment.type === 'walk' ? 'walk-leg' : 'bus-leg';
+                
+                if (segment.type === 'walk') {
+                    journeyHTML += `<li class="${legClass}"><span class="font-bold mr-2">${segment.stops[0].eta}</span> ${segment.description}</li>`;
+                } else { // It's a bus leg
+                    const startStop = segment.stops[0];
+                    const endStop = segment.stops[segment.stops.length - 1];
+                    const startId = startStop.id <= 0 ? 'H' : startStop.id;
+                    const endId = endStop.id <= 0 ? 'H' : endStop.id;
+                    
+                    // MODIFIED: Create a richer description with stop IDs for the summary.
+                    const newDescription = `Take Bus ${segment.route_id + 1} from <span class="font-mono">[${startId}]</span> ${startStop.name} to <span class="font-mono">[${endId}]</span> ${endStop.name}`;
+
+                    let stopListHtml = '<ul class="pl-4 mt-2 space-y-1 border-l-2 border-gray-300 ml-1">';
+                    segment.stops.forEach(stop => {
+                        const displayId = stop.id <= 0 ? 'H' : stop.id;
+                        // MODIFIED: Restructure the stop list to put the ID before the name for easier tracking.
+                        stopListHtml += `<li class="text-xs">
+                                            <span class="font-semibold">${stop.eta}</span> - <span class="font-mono font-bold text-gray-600">[${displayId}]</span> ${stop.name}
+                                         </li>`;
+                    });
+                    stopListHtml += '</ul>';
+
+                    journeyHTML += `<li class="${legClass}">
+                                      <details open>
+                                        <summary class="cursor-pointer hover:bg-gray-100 p-1 rounded -ml-1">
+                                          <span class="font-bold mr-2">${startStop.eta}</span> ${newDescription}
+                                        </summary>
+                                        <div class="pt-1 pl-5">
+                                            ${stopListHtml}
+                                        </div>
+                                      </details>
+                                    </li>`;
+                }
+            }
+            journeyHTML += `</ul></details>`;
+            detailsDiv.innerHTML += journeyHTML;
+        }
+
+    } catch(e) {
+        console.error("Failed to find journey:", e);
+        detailsDiv.innerHTML = `<p class="text-red-500 p-2">An error occurred while finding the journey.</p>`;
+    } finally {
+        loader.style.display = 'none';
+    }
+  }
+
+  // --- Other helper functions (unchanged) ---
+  function addStopoverSelect() {
+      const container = document.getElementById('stopover-list-container');
+      const wrapper = document.createElement('div');
+      wrapper.className = 'flex items-center space-x-2';
+      const newSelect = document.createElement('select');
+      newSelect.className = 'w-full p-2 border border-gray-300 rounded stopover-point';
+      newSelect.innerHTML = document.getElementById('start-point').innerHTML;
+      newSelect.value = "";
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.textContent = '−';
+      removeBtn.className = 'bg-red-500 text-white font-bold w-6 h-6 rounded-full flex-shrink-0 hover:bg-red-600';
+      removeBtn.onclick = () => { container.removeChild(wrapper); };
+      wrapper.appendChild(newSelect);
+      wrapper.appendChild(removeBtn);
+      container.appendChild(wrapper);
+  }
+  
+  async function fetchGoogleRoute(latlngs) {
+      if (latlngs.length < 2) return latlngs.map(p => new google.maps.LatLng(p.lat, p.lng));
+      const request = { origin: latlngs[0], destination: latlngs[latlngs.length - 1], waypoints: latlngs.slice(1, -1).map(p => ({ location: p })), travelMode: 'DRIVING' };
+      try {
+          const result = await directionsService.route(request);
+          if (result.status == 'OK') return result.routes[0].overview_path;
+      } catch (e) { console.error("Directions request failed:", e); }
+      return latlngs.map(p => new google.maps.LatLng(p.lat, p.lng));
+  }
+
+  async function initMap() {
+    const { Map } = await google.maps.importLibrary("maps");
+    map = new Map(document.getElementById("map"), { center: { lat: 37.505, lng: 127.0 }, zoom: 11, mapId: MAP_ID });
+    infoWindow = new google.maps.InfoWindow();
+    directionsService = new google.maps.DirectionsService();
+    await generateNetwork();
+  }
+
+  function updateSliderValue(event) {
+    const s = document.getElementById('time-slider'), v = +s.value;
+    const h = Math.floor(v/60), m = v%60, ampm = h>=12?'PM':'AM', dh = h%12||12;
+    document.getElementById('time-slider-value').textContent = `${String(dh).padStart(2,'0')}:${String(m).padStart(2,'0')} ${ampm}`;
+    if (event && event.type === 'change') { generateNetwork(); }
+  }
+
+  function clearMap() {
+    markers.forEach(x => x.map = null);
+    vprPolylines.forEach(x => x.setMap(null));
+    journeyPolylines.forEach(x => x.setMap(null));
+    markers = []; vprPolylines = []; journeyPolylines = [];
+    document.getElementById('route-info').innerHTML = '';
+    document.getElementById('journey-details').innerHTML = '';
+    if(infoWindow) infoWindow.close();
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const slider = document.getElementById('time-slider');
+    slider.oninput = updateSliderValue;
+    slider.onchange = (e) => updateSliderValue(e); 
+    document.getElementById('num-buses').onchange = generateNetwork;
+    loadGoogleMapsScript();
+  });
+</script>
+</body>
+</html>
